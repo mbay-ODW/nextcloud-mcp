@@ -1,0 +1,48 @@
+services:
+  nextcloud-mcp:
+    image: ghcr.io/mbay-odw/nextcloud-mcp:latest
+    container_name: nextcloud-mcp
+    restart: unless-stopped
+    environment:
+      # Nextcloud
+      - NEXTCLOUD_URL=${NEXTCLOUD_URL}
+      - NEXTCLOUD_USERNAME=${NEXTCLOUD_USERNAME}
+      - NEXTCLOUD_APP_PASSWORD=${NEXTCLOUD_APP_PASSWORD}
+      # Auth
+      - MCP_API_KEY=${MCP_API_KEY}
+      # Direct internal Authelia URL (recommended) or external via Traefik
+      - OIDC_INTROSPECTION_URL=${OIDC_INTROSPECTION_URL:-http://authelia:9091/api/oidc/introspection}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-nextcloud-mcp}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      # Public Authelia URL – RFC 8414 OAuth Authorization Server Metadata
+      - OAUTH_ISSUER=${OAUTH_ISSUER}
+      # Public URL of this MCP server – RFC 9728 Protected Resource Metadata
+      - MCP_SERVER_URL=${MCP_SERVER_URL:-https://nextcloud-mcp.${DOMAIN}}
+      # Logging level: error | warn | info | debug | trace
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    expose:
+      - "3000"
+    # Single Host(...) router – all paths under nextcloud-mcp.${DOMAIN} go to
+    # this container, including /.well-known/* (RFC 8414 + RFC 9728), /sse,
+    # /messages, /mcp. Auth is handled in-app, NOT by Traefik middleware.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.nextcloud-mcp.rule=Host(`nextcloud-mcp.${DOMAIN}`)"
+      - "traefik.http.routers.nextcloud-mcp.entrypoints=websecure"
+      - "traefik.http.routers.nextcloud-mcp.tls=true"
+      - "traefik.http.routers.nextcloud-mcp.tls.certresolver=mydnschallenge"
+      - "traefik.http.routers.nextcloud-mcp.middlewares=middlewares-rate-limit@file,middlewares-secure-headers@file"
+      - "traefik.http.services.nextcloud-mcp.loadbalancer.server.port=3000"
+    networks:
+      - traefik
+      # Add the Nextcloud stack network so this container can reach Nextcloud
+      # internally and Authelia can be reached for OIDC introspection.
+      - nextcloud
+
+networks:
+  traefik:
+    external: true
+  nextcloud:
+    external: true
+    name: ${NEXTCLOUD_NETWORK:-nextcloud_nextcloud-internal}
