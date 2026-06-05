@@ -70,10 +70,13 @@ async function main() {
 
   const api = new NextcloudAPI(nextcloudUrl!, nextcloudUsername!, nextcloudAppPassword!);
 
-  const server = new McpServer(
-    { name: "nextcloud-mcp", version },
-    {
-      instructions: `
+  // Each transport connection needs its own McpServer instance — the SDK
+  // only allows a single active transport per server object.
+  function createMcpServer(): McpServer {
+    const s = new McpServer(
+      { name: "nextcloud-mcp", version },
+      {
+        instructions: `
 Nextcloud MCP Server
 
 Provides access to files and folders in a Nextcloud instance via WebDAV.
@@ -90,12 +93,14 @@ Available operations:
 - search_files: Search by filename (case-insensitive)
 
 All paths are relative to the Nextcloud user's home directory root (/).
-      `.trim(),
-    }
-  );
+        `.trim(),
+      }
+    );
+    registerFileTools(s, api);
+    return s;
+  }
 
-  registerFileTools(server, api);
-  log.info("Tool group registered: files (9 tools)");
+  log.info("McpServer factory ready (9 tools per session)");
 
   if (useHttp) {
     const app = express();
@@ -345,7 +350,7 @@ All paths are relative to the Nextcloud user's home directory root (/).
               delete streamableTransports[transport.sessionId];
             }
           };
-          await server.connect(transport);
+          await createMcpServer().connect(transport);
         } else {
           log.warn(
             `${tag} bad request – no session id and not an initialize call`
@@ -416,7 +421,7 @@ All paths are relative to the Nextcloud user's home directory root (/).
           delete sseTransports[transport.sessionId];
           transport.close();
         });
-        await server.connect(transport);
+        await createMcpServer().connect(transport);
         log.debug(`[/sse GET] sessionId=${transport.sessionId} – server.connect completed`);
       } catch (error) {
         log.error("[/sse GET] error:", error);
@@ -473,7 +478,7 @@ All paths are relative to the Nextcloud user's home directory root (/).
     );
     log.info("starting on stdio");
     const transport = new StdioServerTransport();
-    await server.connect(transport);
+    await createMcpServer().connect(transport);
   }
 }
 
