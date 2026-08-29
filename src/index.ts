@@ -104,7 +104,7 @@ All paths are relative to the Nextcloud user's home directory root (/).
 
   if (useHttp) {
     const app = express();
-    app.use(express.json());
+    app.use(express.json({ limit: "10mb" }));
 
     // Generic request log – sees EVERY incoming request before routing.
     app.use((req, _res, next) => {
