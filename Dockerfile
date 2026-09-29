@@ -1,5 +1,7 @@
 # Builder stage
-FROM node:20-alpine AS builder
+# Build natively on the runner; all deps are pure JS, so node_modules
+# can be copied into the target-platform image without QEMU emulation.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
