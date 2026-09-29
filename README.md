@@ -9,7 +9,8 @@ Implements both SSE (`/sse` + `/messages`) and StreamableHTTP (`/mcp`) transport
 | Tool | Description |
 |------|-------------|
 | `list_files` | List files and folders in a directory |
-| `get_file` | Read text file content (returns binary info for non-text files) |
+| `get_file` | Read text file content; Excel files (`.xlsx`/`.xlsm`) are converted to Markdown tables (returns binary info for other non-text files) |
+| `read_spreadsheet` | Read Excel files (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`) as Markdown, CSV or JSON — optional sheet, A1 range, row limit and formulas |
 | `get_file_info` | Get file/folder metadata (size, type, modified, etag) |
 | `upload_file` | Create or overwrite a text file |
 | `create_folder` | Create a new directory |

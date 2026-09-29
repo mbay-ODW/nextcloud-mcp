@@ -80,6 +80,18 @@ export class NextcloudAPI {
     return data;
   }
 
+  async getFileBuffer(path: string): Promise<Buffer> {
+    path = this.normalizePath(path);
+    const content = await this.client.getFileContents(path, {
+      format: "binary",
+    });
+    const data =
+      content instanceof ArrayBuffer || Buffer.isBuffer(content)
+        ? content
+        : (content as ResponseDataDetailed<Buffer | ArrayBuffer>).data;
+    return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+  }
+
   async getFileInfo(path: string): Promise<FileInfo> {
     path = this.normalizePath(path);
     const stat = await this.client.stat(path) as FileStat | ResponseDataDetailed<FileStat>;
