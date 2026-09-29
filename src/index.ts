@@ -83,7 +83,8 @@ Provides access to files and folders in a Nextcloud instance via WebDAV.
 
 Available operations:
 - list_files: List contents of a directory
-- get_file: Read text file content
+- get_file: Read text file content (Excel .xlsx files are auto-converted to Markdown tables)
+- read_spreadsheet: Read Excel files (.xlsx/.xlsm) as Markdown/CSV/JSON with sheet and range selection
 - get_file_info: Get file/folder metadata
 - upload_file: Create or overwrite a text file
 - create_folder: Create a new directory
@@ -100,7 +101,7 @@ All paths are relative to the Nextcloud user's home directory root (/).
     return s;
   }
 
-  log.info("McpServer factory ready (9 tools per session)");
+  log.info("McpServer factory ready (10 tools per session)");
 
   if (useHttp) {
     const app = express();
