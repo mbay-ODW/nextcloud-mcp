@@ -10,6 +10,8 @@ RUN npm run build
 
 # Production stage
 FROM node:20-alpine AS production
+# Docker-Secrets: NAME_FILE=/run/secrets/... wird beim Start zu NAME geladen
+COPY --chmod=0755 env-secrets.sh /usr/local/bin/env-secrets
 
 WORKDIR /app
 COPY --from=builder /app/build ./build
@@ -18,4 +20,4 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 
 EXPOSE 3000
-ENTRYPOINT [ "node", "build/index.js", "--http", "--port", "3000" ]
+ENTRYPOINT ["/usr/local/bin/env-secrets", "node", "build/index.js", "--http", "--port", "3000"]
