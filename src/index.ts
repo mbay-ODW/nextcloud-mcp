@@ -317,6 +317,27 @@ All paths are relative to the Nextcloud user's home directory root (/).
     // Mounted on BOTH /mcp and /sse (POST) for compatibility.
     // ------------------------------------------------------------------
     const streamableTransports: Record<string, StreamableHTTPServerTransport> = {};
+    // Last-seen per session for the idle reaper: transport.onclose does not
+    // fire when a connection dies uncleanly (proxy timeout, client gone).
+    const streamableLastSeen: Record<string, number> = {};
+    const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+    const SESSION_REAP_INTERVAL_MS = 5 * 60 * 1000;
+    const reapTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [sid, lastSeen] of Object.entries(streamableLastSeen)) {
+        if (now - lastSeen <= SESSION_IDLE_TIMEOUT_MS) continue;
+        const t = streamableTransports[sid];
+        log.warn(`[reaper] closing idle session ${sid} (idle ${Math.round((now - lastSeen) / 1000)}s)`);
+        delete streamableTransports[sid];
+        delete streamableLastSeen[sid];
+        try {
+          t?.close();
+        } catch (error) {
+          log.error(`[reaper] error closing idle session ${sid}:`, error);
+        }
+      }
+    }, SESSION_REAP_INTERVAL_MS);
+    reapTimer.unref();
 
     const streamableHandler: express.RequestHandler = async (req, res) => {
       const tag = `[stream POST ${req.path}]`;
@@ -333,25 +354,46 @@ All paths are relative to the Nextcloud user's home directory root (/).
 
         if (incomingSessionId && streamableTransports[incomingSessionId]) {
           transport = streamableTransports[incomingSessionId];
-        } else if (!incomingSessionId && isInitializeRequest(req.body)) {
+          streamableLastSeen[incomingSessionId] = Date.now();
+        } else if (isInitializeRequest(req.body)) {
+          // New session. A stale session id on an initialize call is ignored
+          // (client re-initializing after a 404).
+          if (incomingSessionId) {
+            log.info(`${tag} initialize with unknown session id ${incomingSessionId} – starting a new session`);
+            delete req.headers["mcp-session-id"];
+          }
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (sid) => {
-              log.info(`${tag} session initialized: ${sid}`);
+              log.info(`${tag} session initialized: ${sid} (active: ${Object.keys(streamableTransports).length + 1})`);
               streamableTransports[sid] = transport;
+              streamableLastSeen[sid] = Date.now();
             },
           });
+          await createMcpServer().connect(transport);
+          // Chain cleanup AFTER connect(): older SDK versions overwrite an
+          // onclose that was set before connecting.
+          const protocolOnClose = transport.onclose;
           transport.onclose = () => {
-            if (transport.sessionId) {
-              log.info(
-                `${tag} session closed: ${transport.sessionId} (remaining: ${
-                  Object.keys(streamableTransports).length - 1
-                })`
-              );
-              delete streamableTransports[transport.sessionId];
+            protocolOnClose?.();
+            const sid = transport.sessionId;
+            if (sid && streamableTransports[sid]) {
+              delete streamableTransports[sid];
+              delete streamableLastSeen[sid];
+              log.info(`${tag} session closed: ${sid} (remaining: ${Object.keys(streamableTransports).length})`);
             }
           };
-          await createMcpServer().connect(transport);
+        } else if (incomingSessionId) {
+          // Unknown/expired session (closed, reaped or server restarted).
+          // MCP spec: 404 so the client starts a new session; 400 left
+          // clients retrying a dead session.
+          log.warn(`${tag} unknown or expired session ${incomingSessionId} – 404, client must re-initialize`);
+          res.status(404).json({
+            jsonrpc: "2.0",
+            error: { code: -32001, message: "Session not found" },
+            id: null,
+          });
+          return;
         } else {
           log.warn(
             `${tag} bad request – no session id and not an initialize call`
@@ -360,7 +402,7 @@ All paths are relative to the Nextcloud user's home directory root (/).
             jsonrpc: "2.0",
             error: {
               code: -32000,
-              message: "Bad Request: no valid session id and not an initialize call",
+              message: "Bad Request: no session id and not an initialize call",
             },
             id: null,
           });
@@ -386,14 +428,23 @@ All paths are relative to the Nextcloud user's home directory root (/).
       res
     ) => {
       const sid = req.headers["mcp-session-id"] as string | undefined;
-      if (!sid || !streamableTransports[sid]) {
+      if (!sid) {
         res.status(400).json({
           jsonrpc: "2.0",
-          error: { code: -32000, message: "Invalid or missing session id" },
+          error: { code: -32000, message: "Missing session id" },
           id: null,
         });
         return;
       }
+      if (!streamableTransports[sid]) {
+        res.status(404).json({
+          jsonrpc: "2.0",
+          error: { code: -32001, message: "Session not found" },
+          id: null,
+        });
+        return;
+      }
+      streamableLastSeen[sid] = Date.now();
       await streamableTransports[sid].handleRequest(req, res);
     };
 
@@ -447,7 +498,7 @@ All paths are relative to the Nextcloud user's home directory root (/).
         log.warn(
           `[/messages POST] sessionId=${sessionId} – no transport found (known: ${Object.keys(sseTransports).join(",") || "none"})`
         );
-        res.status(400).send("No transport found for sessionId");
+        res.status(404).send("No transport found for sessionId");
         return;
       }
       try {
