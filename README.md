@@ -9,7 +9,9 @@ Implements both SSE (`/sse` + `/messages`) and StreamableHTTP (`/mcp`) transport
 | Tool | Description |
 |------|-------------|
 | `list_files` | List files and folders in a directory |
-| `get_file` | Read text file content; Excel files (`.xlsx`/`.xlsm`) are converted to Markdown tables (returns binary info for other non-text files) |
+| `get_file` | Read text file content; Excel files (`.xlsx`/`.xlsm`) are converted to Markdown tables, Word (`.docx`) and PDF to text, ZIP archives (`.zip`, `.evex`) list their entries (returns binary info for other non-text files); long texts in windows (`offset`, `max_chars`) |
+| `read_document` | Read Word (`.docx`, `.docm`, `.dotx`) or PDF as text — Word tables as tab-separated rows, PDF per page with optional page selection (`pages: "1-5,8"`) |
+| `read_archive` | List the entries of a ZIP archive (`.zip`, EVEBI `.evex`/`.evea`, OpenDocument) or read one entry as text (e.g. `projekt.xml`) |
 | `read_spreadsheet` | Read Excel files (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`) as Markdown, CSV or JSON — optional sheet, A1 range, row limit and formulas |
 | `get_file_info` | Get file/folder metadata (size, type, modified, etag) |
 | `upload_file` | Create or overwrite a text file |
