@@ -7,8 +7,53 @@ import {
   isUnsupportedSpreadsheetFile,
   readSpreadsheet,
 } from "../utils/spreadsheet";
+import {
+  DEFAULT_MAX_CHARS,
+  documentToText,
+  isArchiveFile,
+  isDocumentFile,
+  isPdfFile,
+  isWordFile,
+  listArchive,
+  page,
+  readArchiveEntry,
+} from "../utils/documents";
 
 const MAX_SPREADSHEET_BYTES = 50 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 80 * 1024 * 1024;
+
+const pagingSchema = {
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .default(0)
+    .describe("Character offset to start from (for long texts; the reply says where to continue)"),
+  max_chars: z
+    .number()
+    .int()
+    .min(1000)
+    .max(400000)
+    .optional()
+    .default(DEFAULT_MAX_CHARS)
+    .describe(`Maximum characters returned (default ${DEFAULT_MAX_CHARS})`),
+};
+
+function tooLarge(size: number, limit: number) {
+  return {
+    content: [{ type: "text", text: `Error: File too large (${size} bytes, limit ${limit}).` }],
+    isError: true,
+  };
+}
+
+function notFoundOr(prefix: string, path: string, err: any) {
+  const msg = err?.message ?? String(err);
+  if (msg.includes("404") || msg.includes("Not Found")) {
+    return { content: [{ type: "text", text: `Error: File not found: ${path}` }], isError: true };
+  }
+  return { content: [{ type: "text", text: `${prefix}: ${msg}` }], isError: true };
+}
 
 export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
@@ -56,11 +101,12 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   server.tool(
     "get_file",
-    "Read the content of a text file from Nextcloud. Excel files (.xlsx/.xlsm) are converted to Markdown tables of all sheets (use read_spreadsheet for sheet/range selection). For other binary files, returns file metadata instead.",
+    "Read the content of a text file from Nextcloud. Excel files (.xlsx/.xlsm) are converted to Markdown tables of all sheets (use read_spreadsheet for sheet/range selection). Word (.docx) and PDF files are converted to text (tables as tab-separated rows; use read_document for page selection). ZIP archives such as EVEBI project files (.evex) list their entries (read them with read_archive). For other binary files, returns file metadata instead. Long texts are returned in windows (offset, max_chars).",
     {
       path: z.string().describe("Path to the file"),
+      ...pagingSchema,
     },
-    async ({ path }) => {
+    async ({ path, offset, max_chars }) => {
       try {
         const info = await api.getFileInfo(path);
         if (info.is_directory) {
@@ -78,7 +124,28 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
           }
           const buffer = await api.getFileBuffer(path);
           const text = await readSpreadsheet(buffer, info.name);
-          return { content: [{ type: "text", text }] };
+          return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
+        }
+        if (isDocumentFile(info.name, info.content_type)) {
+          if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
+          const text = await documentToText(await api.getFileBuffer(path), info.name);
+          return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
+        }
+        if (isArchiveFile(info.name)) {
+          if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
+          const entries = await listArchive(await api.getFileBuffer(path));
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  { message: "ZIP archive: read an entry with read_archive (path, entry).", file_info: info, entries },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
         if (!api.isTextFile(info.content_type, info.name)) {
           return {
@@ -99,7 +166,7 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
         }
         const content = await api.getFileContent(path);
         return {
-          content: [{ type: "text", text: content ?? "" }],
+          content: [{ type: "text", text: page(content ?? "", offset, max_chars) }],
         };
       } catch (err: any) {
         const msg = err?.message ?? String(err);
@@ -207,6 +274,74 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
           content: [{ type: "text", text: `Error reading spreadsheet: ${msg}` }],
           isError: true,
         };
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // read_document
+  // -----------------------------------------------------------------------
+  server.tool(
+    "read_document",
+    "Read a Word (.docx, .docm, .dotx) or PDF file from Nextcloud as plain text. Word: paragraphs as lines, " +
+      "tables as one line per row with tab-separated cells, headers/footers at the end. PDF: text per page " +
+      '("--- Page n of N ---"), optional page selection such as "1-5,8"; scanned PDFs without a text layer ' +
+      "return empty pages. Long texts are returned in windows (offset, max_chars).",
+    {
+      path: z.string().describe("Path to the Word or PDF file"),
+      pages: z.string().optional().describe('PDF only: pages to read, e.g. "1-5,8" (default: all)'),
+      ...pagingSchema,
+    },
+    async ({ path, pages, offset, max_chars }) => {
+      try {
+        const info = await api.getFileInfo(path);
+        if (info.is_directory) {
+          return { content: [{ type: "text", text: `Error: '${path}' is a directory, not a file.` }], isError: true };
+        }
+        if (!isWordFile(info.name) && !isPdfFile(info.name, info.content_type)) {
+          return {
+            content: [{ type: "text", text: `Error: '${info.name}' is neither a Word (.docx) nor a PDF file.` }],
+            isError: true,
+          };
+        }
+        if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
+        const text = await documentToText(await api.getFileBuffer(path), info.name, pages);
+        return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
+      } catch (err: any) {
+        return notFoundOr("Error reading document", path, err);
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // read_archive
+  // -----------------------------------------------------------------------
+  server.tool(
+    "read_archive",
+    "List or read entries of a ZIP archive in Nextcloud (.zip, EVEBI project files .evex/.evea, OpenDocument). " +
+      "Without entry: list of entries with sizes. With entry: its text (XML and text files as is, Word/PDF " +
+      "converted), e.g. entry 'projekt.xml' of an .evex. Long texts are returned in windows (offset, max_chars).",
+    {
+      path: z.string().describe("Path to the archive"),
+      entry: z.string().optional().describe("Entry to read, e.g. projekt.xml (omit to list entries)"),
+      ...pagingSchema,
+    },
+    async ({ path, entry, offset, max_chars }) => {
+      try {
+        const info = await api.getFileInfo(path);
+        if (info.is_directory) {
+          return { content: [{ type: "text", text: `Error: '${path}' is a directory, not a file.` }], isError: true };
+        }
+        if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
+        const buffer = await api.getFileBuffer(path);
+        if (!entry) {
+          const entries = await listArchive(buffer);
+          return { content: [{ type: "text", text: JSON.stringify({ path, entries }, null, 2) }] };
+        }
+        const text = await readArchiveEntry(buffer, entry);
+        return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
+      } catch (err: any) {
+        return notFoundOr("Error reading archive", path, err);
       }
     }
   );
