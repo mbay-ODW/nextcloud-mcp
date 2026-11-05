@@ -37,7 +37,11 @@ export function isDocumentFile(filename: string, contentType?: string): boolean 
 // Paging of long texts
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_MAX_CHARS = 100_000;
+/**
+ * Default window size. Kept small on purpose: a few pages of text are enough for most questions,
+ * and large documents should be read with pages= or query= instead of in one go.
+ */
+export const DEFAULT_MAX_CHARS = 15_000;
 
 /** Cut a long text into a window and say how to get the rest. */
 export function page(text: string, offset = 0, maxChars = DEFAULT_MAX_CHARS): string {
@@ -204,6 +208,57 @@ export function parsePages(spec: string | undefined, count: number): number[] {
     for (let p = Math.min(a, b); p <= Math.max(a, b); p++) if (p >= 1 && p <= count) pages.add(p);
   }
   return [...pages].sort((x, y) => x - y);
+}
+
+async function openPdf(buffer: Buffer): Promise<any> {
+  const pdfjs = await importEsm("pdfjs-dist/legacy/build/pdf.mjs");
+  return pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    isEvalSupported: false,
+    disableFontFace: true,
+    useSystemFonts: false,
+    verbosity: 0,
+  }).promise;
+}
+
+async function pageText(doc: any, n: number): Promise<string> {
+  const p = await doc.getPage(n);
+  try {
+    const content = await p.getTextContent();
+    let text = "";
+    for (const item of content.items as any[]) {
+      if (typeof item.str !== "string") continue;
+      text += item.str;
+      text += item.hasEOL ? "\n" : item.str && !item.str.endsWith(" ") ? " " : "";
+    }
+    return text.replace(/[ \t]+\n/g, "\n").trim();
+  } finally {
+    p.cleanup();
+  }
+}
+
+/** Text of every page (up to maxPages) plus the total page count. */
+export async function pdfPages(
+  buffer: Buffer,
+  maxPages: number
+): Promise<{ total: number; pages: { n: number; text: string }[] }> {
+  const doc = await openPdf(buffer);
+  try {
+    const pages: { n: number; text: string }[] = [];
+    const last = Math.min(doc.numPages, maxPages);
+    for (let n = 1; n <= last; n++) {
+      let text = "";
+      try {
+        text = await pageText(doc, n);
+      } catch {
+        text = "";
+      }
+      pages.push({ n, text });
+    }
+    return { total: doc.numPages, pages };
+  } finally {
+    await doc.destroy();
+  }
 }
 
 /** Text of a PDF, one block per page ("--- Page n of N ---"); lines follow the PDF's end-of-line marks. */

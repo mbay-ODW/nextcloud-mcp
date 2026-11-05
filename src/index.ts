@@ -85,6 +85,7 @@ Available operations:
 - list_files: List contents of a directory
 - get_file: Read text file content (Excel .xlsx files are auto-converted to Markdown tables)
 - read_spreadsheet: Read Excel files (.xlsx/.xlsm) as Markdown/CSV/JSON with sheet and range selection
+- read_document: Read the text of PDF, Word, OpenDocument, PowerPoint, Excel or text files without loading the whole file: windows (offset/max_chars, default 15000), pages="2-5", or query="…" for matching passages with page numbers. Prefer pages/query for large documents.
 - get_file_info: Get file/folder metadata
 - upload_file: Create or overwrite a text file
 - create_folder: Create a new directory
