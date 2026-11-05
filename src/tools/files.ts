@@ -9,15 +9,19 @@ import {
 } from "../utils/spreadsheet";
 import {
   DEFAULT_MAX_CHARS,
-  documentToText,
   isArchiveFile,
   isDocumentFile,
-  isPdfFile,
-  isWordFile,
   listArchive,
   page,
   readArchiveEntry,
 } from "../utils/documents";
+import {
+  cachedExtract,
+  findSnippets,
+  isExtractable,
+  parsePageSpec,
+  selectPages,
+} from "../utils/extract";
 
 const MAX_SPREADSHEET_BYTES = 50 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES = 80 * 1024 * 1024;
@@ -39,6 +43,69 @@ const pagingSchema = {
     .default(DEFAULT_MAX_CHARS)
     .describe(`Maximum characters returned (default ${DEFAULT_MAX_CHARS})`),
 };
+
+/**
+ * Read a document via the extraction cache and return the requested part:
+ * the passages for a query, selected pages, or a window of the running text.
+ */
+async function readExtracted(
+  api: NextcloudAPI,
+  path: string,
+  info: any,
+  opts: { pages?: string; query?: string; offset: number; max_chars: number }
+) {
+  const key = `${info.path ?? path}|${info.etag ?? ""}|${info.size}`;
+  const { doc } = await cachedExtract(key, async () => ({
+    buffer: await api.getFileBuffer(path),
+    filename: info.name,
+    contentType: info.content_type,
+  }));
+  const label = doc.label.toLowerCase();
+  const pageInfo = doc.pages.length ? `, ${doc.pages.length} ${label}s` : "";
+  const header = `[${info.name}: ${doc.kind.toUpperCase()}${pageInfo}, ${doc.text.length} characters]`;
+  const warnings = doc.warnings.map((w) => `[Warning: ${w}]`).join("\n");
+  const head = warnings ? `${header}\n${warnings}` : header;
+
+  if (opts.query) {
+    const { total, hits } = findSnippets(doc, opts.query);
+    const result: any = {
+      file: info.name,
+      kind: doc.kind,
+      page_count: doc.pages.length || null,
+      text_length: doc.text.length,
+      needs_ocr: doc.needsOcr,
+      query: opts.query,
+      total_hits: total,
+      hits,
+    };
+    if (doc.warnings.length) result.warnings = doc.warnings;
+    if (total > hits.length) result.note = "More hits than shown – narrow the query or read by pages.";
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+
+  let text = doc.text;
+  if (opts.pages) {
+    if (!doc.pages.length) {
+      return {
+        content: [{ type: "text", text: `${head}\n[Note: this file type has no ${label}s; 'pages' was ignored.]\n\n${page(text, opts.offset, opts.max_chars)}` }],
+      };
+    }
+    const wanted = parsePageSpec(opts.pages, doc.pages.length);
+    if (!wanted.length) {
+      return {
+        content: [{ type: "text", text: `Error: no such ${label}. ${doc.label}s 1–${doc.pages.length} exist.` }],
+        isError: true,
+      };
+    }
+    text = selectPages(doc, wanted);
+  }
+  const body = page(text, opts.offset, opts.max_chars);
+  const more =
+    text.length > opts.max_chars && doc.pages.length && !opts.pages
+      ? `\n[Tip: jump with pages="…" or search with query="…" instead of reading everything.]`
+      : "";
+  return { content: [{ type: "text", text: `${head}${more}\n\n${body}` }] };
+}
 
 function tooLarge(size: number, limit: number) {
   return {
@@ -101,7 +168,7 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   server.tool(
     "get_file",
-    "Read the content of a text file from Nextcloud. Excel files (.xlsx/.xlsm) are converted to Markdown tables of all sheets (use read_spreadsheet for sheet/range selection). Word (.docx) and PDF files are converted to text (tables as tab-separated rows; use read_document for page selection). ZIP archives such as EVEBI project files (.evex) list their entries (read them with read_archive). For other binary files, returns file metadata instead. Long texts are returned in windows (offset, max_chars).",
+    "Read the content of a text file from Nextcloud. Excel files (.xlsx/.xlsm) are converted to Markdown tables of all sheets (use read_spreadsheet for sheet/range selection). Word, PDF, OpenDocument (.odt/.ods/.odp) and PowerPoint (.pptx) files are converted to text (use read_document for page selection or search). ZIP archives such as EVEBI project files (.evex) list their entries (read them with read_archive). For other binary files, returns file metadata instead. Long texts are returned in windows (offset, max_chars).",
     {
       path: z.string().describe("Path to the file"),
       ...pagingSchema,
@@ -126,10 +193,9 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
           const text = await readSpreadsheet(buffer, info.name);
           return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
         }
-        if (isDocumentFile(info.name, info.content_type)) {
+        if (isDocumentFile(info.name, info.content_type) || /\.(odt|ods|odp|pptx)$/i.test(info.name)) {
           if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
-          const text = await documentToText(await api.getFileBuffer(path), info.name);
-          return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
+          return await readExtracted(api, path, info, { offset, max_chars });
         }
         if (isArchiveFile(info.name)) {
           if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
@@ -191,7 +257,7 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
     "read_spreadsheet",
     "Read the contents of an Excel file (.xlsx, .xlsm, .xltx, .xltm) from Nextcloud as text. " +
       "Returns calculated cell values (formula results, dates as ISO) as a Markdown table, CSV or JSON. " +
-      "Optionally select a single sheet and/or an A1 range. Legacy .xls and .ods are not supported — save them as .xlsx first.",
+      "Optionally select a single sheet and/or an A1 range. Legacy .xls is not supported; read .ods with read_document.",
     {
       path: z.string().describe("Path to the Excel file"),
       sheet: z
@@ -235,7 +301,7 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
             content: [
               {
                 type: "text",
-                text: `Error: '${info.name}' uses a legacy/unsupported spreadsheet format. Only .xlsx, .xlsm, .xltx and .xltm can be read — please save the file as .xlsx.`,
+                text: `Error: '${info.name}' uses a legacy/unsupported spreadsheet format. Only .xlsx, .xlsm, .xltx and .xltm can be read here. For .ods use read_document (sheets as text).`,
               },
             ],
             isError: true,
@@ -283,30 +349,44 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   server.tool(
     "read_document",
-    "Read a Word (.docx, .docm, .dotx) or PDF file from Nextcloud as plain text. Word: paragraphs as lines, " +
-      "tables as one line per row with tab-separated cells, headers/footers at the end. PDF: text per page " +
-      '("--- Page n of N ---"), optional page selection such as "1-5,8"; scanned PDFs without a text layer ' +
-      "return empty pages. Long texts are returned in windows (offset, max_chars).",
+    "Read the TEXT of a document in Nextcloud without loading the whole file into the context: PDF, Word " +
+      "(.docx/.docm/.dotx), OpenDocument (.odt/.ods/.odp), PowerPoint (.pptx), Excel (.xlsx) and text files. " +
+      "Three ways to read: (1) a window of the running text (offset/max_chars, default 15000 – the reply says " +
+      'where to continue); (2) pages="3" or "2-5,8" for PDF pages, slides or sheets; (3) query="Frist Betrag" ' +
+      "returns only the matching passages (±300 characters) with page and offset. The first line states the " +
+      "number of pages and characters. Scanned PDFs without a text layer are flagged with a warning (needs " +
+      "OCR, e.g. Paperless). The extracted text is cached, so further calls are fast.",
     {
-      path: z.string().describe("Path to the Word or PDF file"),
-      pages: z.string().optional().describe('PDF only: pages to read, e.g. "1-5,8" (default: all)'),
+      path: z.string().describe("Path to the document"),
+      pages: z
+        .string()
+        .optional()
+        .describe('Pages/slides/sheets to read, e.g. "3", "1-5,8" or "10-" (default: all)'),
+      query: z
+        .string()
+        .optional()
+        .describe("Search words (case-insensitive, any word matches); returns passages instead of the text"),
       ...pagingSchema,
     },
-    async ({ path, pages, offset, max_chars }) => {
+    async ({ path, pages, query, offset, max_chars }) => {
       try {
         const info = await api.getFileInfo(path);
         if (info.is_directory) {
           return { content: [{ type: "text", text: `Error: '${path}' is a directory, not a file.` }], isError: true };
         }
-        if (!isWordFile(info.name) && !isPdfFile(info.name, info.content_type)) {
+        if (!isExtractable(info.name, info.content_type)) {
           return {
-            content: [{ type: "text", text: `Error: '${info.name}' is neither a Word (.docx) nor a PDF file.` }],
+            content: [
+              {
+                type: "text",
+                text: `Error: '${info.name}' is not a supported document (PDF, Word, OpenDocument, PowerPoint, Excel, text). Images and scans need OCR (Paperless).`,
+              },
+            ],
             isError: true,
           };
         }
         if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
-        const text = await documentToText(await api.getFileBuffer(path), info.name, pages);
-        return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
+        return await readExtracted(api, path, info, { pages, query, offset, max_chars });
       } catch (err: any) {
         return notFoundOr("Error reading document", path, err);
       }

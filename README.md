@@ -10,7 +10,7 @@ Implements both SSE (`/sse` + `/messages`) and StreamableHTTP (`/mcp`) transport
 |------|-------------|
 | `list_files` | List files and folders in a directory |
 | `get_file` | Read text file content; Excel files (`.xlsx`/`.xlsm`) are converted to Markdown tables, Word (`.docx`) and PDF to text, ZIP archives (`.zip`, `.evex`) list their entries (returns binary info for other non-text files); long texts in windows (`offset`, `max_chars`) |
-| `read_document` | Read Word (`.docx`, `.docm`, `.dotx`) or PDF as text — Word tables as tab-separated rows, PDF per page with optional page selection (`pages: "1-5,8"`) |
+| `read_document` | Read the text of PDF, Word (`.docx`/`.docm`/`.dotx`), OpenDocument (`.odt`/`.ods`/`.odp`), PowerPoint (`.pptx`), Excel or text files without loading the whole file: a window (`offset`/`max_chars`, default 15,000), selected pages/slides/sheets (`pages: "1-5,8"`), or only the passages for a search (`query: "Frist Betrag"`, with page numbers). Scanned PDFs get an OCR warning. Extracted text is cached per file version (etag). |
 | `read_archive` | List the entries of a ZIP archive (`.zip`, EVEBI `.evex`/`.evea`, OpenDocument) or read one entry as text (e.g. `projekt.xml`) |
 | `read_spreadsheet` | Read Excel files (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`) as Markdown, CSV or JSON — optional sheet, A1 range, row limit and formulas |
 | `get_file_info` | Get file/folder metadata (size, type, modified, etag) |
@@ -20,6 +20,8 @@ Implements both SSE (`/sse` + `/messages`) and StreamableHTTP (`/mcp`) transport
 | `move_file` | Move or rename a file/folder |
 | `copy_file` | Copy a file/folder |
 | `search_files` | Search by filename (case-insensitive, recursive) |
+
+Reading long documents: the first line of every `read_document` reply states the type, page count and length. For large files, use `query` first, then read the pages it points to with `pages`.
 
 ## Environment Variables
 
