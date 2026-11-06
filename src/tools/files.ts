@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { NextcloudAPI } from "../api/NextcloudAPI";
 import {
@@ -79,7 +79,8 @@ async function readExtracted(
       hits,
     };
     if (doc.warnings.length) result.warnings = doc.warnings;
-    if (total > hits.length) result.note = "More hits than shown – narrow the query or read by pages.";
+    if (total > hits.length)
+      result.note = "More hits than shown – narrow the query or read by pages.";
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 
@@ -87,13 +88,23 @@ async function readExtracted(
   if (opts.pages) {
     if (!doc.pages.length) {
       return {
-        content: [{ type: "text", text: `${head}\n[Note: this file type has no ${label}s; 'pages' was ignored.]\n\n${page(text, opts.offset, opts.max_chars)}` }],
+        content: [
+          {
+            type: "text",
+            text: `${head}\n[Note: this file type has no ${label}s; 'pages' was ignored.]\n\n${page(text, opts.offset, opts.max_chars)}`,
+          },
+        ],
       };
     }
     const wanted = parsePageSpec(opts.pages, doc.pages.length);
     if (!wanted.length) {
       return {
-        content: [{ type: "text", text: `Error: no such ${label}. ${doc.label}s 1–${doc.pages.length} exist.` }],
+        content: [
+          {
+            type: "text",
+            text: `Error: no such ${label}. ${doc.label}s 1–${doc.pages.length} exist.`,
+          },
+        ],
         isError: true,
       };
     }
@@ -126,15 +137,17 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // list_files
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "list_files",
-    "List files and folders in a Nextcloud directory.",
     {
-      path: z
-        .string()
-        .optional()
-        .default("/")
-        .describe("Directory path to list (default: root /)"),
+      description: "List files and folders in a Nextcloud directory.",
+      inputSchema: z.object({
+        path: z
+          .string()
+          .optional()
+          .default("/")
+          .describe("Directory path to list (default: root /)"),
+      }),
     },
     async ({ path }) => {
       try {
@@ -166,12 +179,15 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // get_file
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "get_file",
-    "Read the content of a text file from Nextcloud. Excel files (.xlsx/.xlsm) are converted to Markdown tables of all sheets (use read_spreadsheet for sheet/range selection). Word, PDF, OpenDocument (.odt/.ods/.odp) and PowerPoint (.pptx) files are converted to text (use read_document for page selection or search). ZIP archives such as EVEBI project files (.evex) list their entries (read them with read_archive). For other binary files, returns file metadata instead. Long texts are returned in windows (offset, max_chars).",
     {
-      path: z.string().describe("Path to the file"),
-      ...pagingSchema,
+      description:
+        "Read the content of a text file from Nextcloud. Excel files (.xlsx/.xlsm) are converted to Markdown tables of all sheets (use read_spreadsheet for sheet/range selection). Word, PDF, OpenDocument (.odt/.ods/.odp) and PowerPoint (.pptx) files are converted to text (use read_document for page selection or search). ZIP archives such as EVEBI project files (.evex) list their entries (read them with read_archive). For other binary files, returns file metadata instead. Long texts are returned in windows (offset, max_chars).",
+      inputSchema: z.object({
+        path: z.string().describe("Path to the file"),
+        ...pagingSchema,
+      }),
     },
     async ({ path, offset, max_chars }) => {
       try {
@@ -185,7 +201,12 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
         if (isSpreadsheetFile(info.name)) {
           if (info.size > MAX_SPREADSHEET_BYTES) {
             return {
-              content: [{ type: "text", text: `Error: Spreadsheet too large (${info.size} bytes, limit ${MAX_SPREADSHEET_BYTES}).` }],
+              content: [
+                {
+                  type: "text",
+                  text: `Error: Spreadsheet too large (${info.size} bytes, limit ${MAX_SPREADSHEET_BYTES}).`,
+                },
+              ],
               isError: true,
             };
           }
@@ -193,7 +214,10 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
           const text = await readSpreadsheet(buffer, info.name);
           return { content: [{ type: "text", text: page(text, offset, max_chars) }] };
         }
-        if (isDocumentFile(info.name, info.content_type) || /\.(odt|ods|odp|pptx)$/i.test(info.name)) {
+        if (
+          isDocumentFile(info.name, info.content_type) ||
+          /\.(odt|ods|odp|pptx)$/i.test(info.name)
+        ) {
           if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
           return await readExtracted(api, path, info, { offset, max_chars });
         }
@@ -205,7 +229,11 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
               {
                 type: "text",
                 text: JSON.stringify(
-                  { message: "ZIP archive: read an entry with read_archive (path, entry).", file_info: info, entries },
+                  {
+                    message: "ZIP archive: read an entry with read_archive (path, entry).",
+                    file_info: info,
+                    entries,
+                  },
                   null,
                   2
                 ),
@@ -220,7 +248,8 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
                 type: "text",
                 text: JSON.stringify(
                   {
-                    message: "File is binary or has an unsupported content type — cannot return as text.",
+                    message:
+                      "File is binary or has an unsupported content type — cannot return as text.",
                     file_info: info,
                   },
                   null,
@@ -253,39 +282,42 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // read_spreadsheet
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "read_spreadsheet",
-    "Read the contents of an Excel file (.xlsx, .xlsm, .xltx, .xltm) from Nextcloud as text. " +
-      "Returns calculated cell values (formula results, dates as ISO) as a Markdown table, CSV or JSON. " +
-      "Optionally select a single sheet and/or an A1 range. Legacy .xls is not supported; read .ods with read_document.",
     {
-      path: z.string().describe("Path to the Excel file"),
-      sheet: z
-        .string()
-        .optional()
-        .describe("Sheet name or 1-based sheet index. Omit to read all sheets."),
-      range: z
-        .string()
-        .optional()
-        .describe('A1-style cell range, e.g. "A1:H100". Omit to read the used area.'),
-      format: z
-        .enum(["markdown", "csv", "json"])
-        .optional()
-        .default("markdown")
-        .describe("Output format (default: markdown)"),
-      max_rows: z
-        .number()
-        .int()
-        .min(1)
-        .max(10000)
-        .optional()
-        .default(500)
-        .describe("Maximum data rows per sheet, excluding the header row (default: 500)"),
-      include_formulas: z
-        .boolean()
-        .optional()
-        .default(false)
-        .describe("Append the formula to each calculated value, e.g. '42 [=SUM(A1:A3)]'"),
+      description:
+        "Read the contents of an Excel file (.xlsx, .xlsm, .xltx, .xltm) from Nextcloud as text. " +
+        "Returns calculated cell values (formula results, dates as ISO) as a Markdown table, CSV or JSON. " +
+        "Optionally select a single sheet and/or an A1 range. Legacy .xls is not supported; read .ods with read_document.",
+      inputSchema: z.object({
+        path: z.string().describe("Path to the Excel file"),
+        sheet: z
+          .string()
+          .optional()
+          .describe("Sheet name or 1-based sheet index. Omit to read all sheets."),
+        range: z
+          .string()
+          .optional()
+          .describe('A1-style cell range, e.g. "A1:H100". Omit to read the used area.'),
+        format: z
+          .enum(["markdown", "csv", "json"])
+          .optional()
+          .default("markdown")
+          .describe("Output format (default: markdown)"),
+        max_rows: z
+          .number()
+          .int()
+          .min(1)
+          .max(10000)
+          .optional()
+          .default(500)
+          .describe("Maximum data rows per sheet, excluding the header row (default: 500)"),
+        include_formulas: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("Append the formula to each calculated value, e.g. '42 [=SUM(A1:A3)]'"),
+      }),
     },
     async ({ path, sheet, range, format, max_rows, include_formulas }) => {
       try {
@@ -309,13 +341,23 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
         }
         if (!isSpreadsheetFile(info.name)) {
           return {
-            content: [{ type: "text", text: `Error: '${info.name}' is not an Excel file (.xlsx/.xlsm/.xltx/.xltm). Use get_file for text files.` }],
+            content: [
+              {
+                type: "text",
+                text: `Error: '${info.name}' is not an Excel file (.xlsx/.xlsm/.xltx/.xltm). Use get_file for text files.`,
+              },
+            ],
             isError: true,
           };
         }
         if (info.size > MAX_SPREADSHEET_BYTES) {
           return {
-            content: [{ type: "text", text: `Error: Spreadsheet too large (${info.size} bytes, limit ${MAX_SPREADSHEET_BYTES}).` }],
+            content: [
+              {
+                type: "text",
+                text: `Error: Spreadsheet too large (${info.size} bytes, limit ${MAX_SPREADSHEET_BYTES}).`,
+              },
+            ],
             isError: true,
           };
         }
@@ -347,32 +389,40 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // read_document
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "read_document",
-    "Read the TEXT of a document in Nextcloud without loading the whole file into the context: PDF, Word " +
-      "(.docx/.docm/.dotx), OpenDocument (.odt/.ods/.odp), PowerPoint (.pptx), Excel (.xlsx) and text files. " +
-      "Three ways to read: (1) a window of the running text (offset/max_chars, default 15000 – the reply says " +
-      'where to continue); (2) pages="3" or "2-5,8" for PDF pages, slides or sheets; (3) query="Frist Betrag" ' +
-      "returns only the matching passages (±300 characters) with page and offset. The first line states the " +
-      "number of pages and characters. Scanned PDFs without a text layer are flagged with a warning (needs " +
-      "OCR, e.g. Paperless). The extracted text is cached, so further calls are fast.",
     {
-      path: z.string().describe("Path to the document"),
-      pages: z
-        .string()
-        .optional()
-        .describe('Pages/slides/sheets to read, e.g. "3", "1-5,8" or "10-" (default: all)'),
-      query: z
-        .string()
-        .optional()
-        .describe("Search words (case-insensitive, any word matches); returns passages instead of the text"),
-      ...pagingSchema,
+      description:
+        "Read the TEXT of a document in Nextcloud without loading the whole file into the context: PDF, Word " +
+        "(.docx/.docm/.dotx), OpenDocument (.odt/.ods/.odp), PowerPoint (.pptx), Excel (.xlsx) and text files. " +
+        "Three ways to read: (1) a window of the running text (offset/max_chars, default 15000 – the reply says " +
+        'where to continue); (2) pages="3" or "2-5,8" for PDF pages, slides or sheets; (3) query="Frist Betrag" ' +
+        "returns only the matching passages (±300 characters) with page and offset. The first line states the " +
+        "number of pages and characters. Scanned PDFs without a text layer are flagged with a warning (needs " +
+        "OCR, e.g. Paperless). The extracted text is cached, so further calls are fast.",
+      inputSchema: z.object({
+        path: z.string().describe("Path to the document"),
+        pages: z
+          .string()
+          .optional()
+          .describe('Pages/slides/sheets to read, e.g. "3", "1-5,8" or "10-" (default: all)'),
+        query: z
+          .string()
+          .optional()
+          .describe(
+            "Search words (case-insensitive, any word matches); returns passages instead of the text"
+          ),
+        ...pagingSchema,
+      }),
     },
     async ({ path, pages, query, offset, max_chars }) => {
       try {
         const info = await api.getFileInfo(path);
         if (info.is_directory) {
-          return { content: [{ type: "text", text: `Error: '${path}' is a directory, not a file.` }], isError: true };
+          return {
+            content: [{ type: "text", text: `Error: '${path}' is a directory, not a file.` }],
+            isError: true,
+          };
         }
         if (!isExtractable(info.name, info.content_type)) {
           return {
@@ -396,21 +446,30 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // read_archive
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "read_archive",
-    "List or read entries of a ZIP archive in Nextcloud (.zip, EVEBI project files .evex/.evea, OpenDocument). " +
-      "Without entry: list of entries with sizes. With entry: its text (XML and text files as is, Word/PDF " +
-      "converted), e.g. entry 'projekt.xml' of an .evex. Long texts are returned in windows (offset, max_chars).",
     {
-      path: z.string().describe("Path to the archive"),
-      entry: z.string().optional().describe("Entry to read, e.g. projekt.xml (omit to list entries)"),
-      ...pagingSchema,
+      description:
+        "List or read entries of a ZIP archive in Nextcloud (.zip, EVEBI project files .evex/.evea, OpenDocument). " +
+        "Without entry: list of entries with sizes. With entry: its text (XML and text files as is, Word/PDF " +
+        "converted), e.g. entry 'projekt.xml' of an .evex. Long texts are returned in windows (offset, max_chars).",
+      inputSchema: z.object({
+        path: z.string().describe("Path to the archive"),
+        entry: z
+          .string()
+          .optional()
+          .describe("Entry to read, e.g. projekt.xml (omit to list entries)"),
+        ...pagingSchema,
+      }),
     },
     async ({ path, entry, offset, max_chars }) => {
       try {
         const info = await api.getFileInfo(path);
         if (info.is_directory) {
-          return { content: [{ type: "text", text: `Error: '${path}' is a directory, not a file.` }], isError: true };
+          return {
+            content: [{ type: "text", text: `Error: '${path}' is a directory, not a file.` }],
+            isError: true,
+          };
         }
         if (info.size > MAX_DOCUMENT_BYTES) return tooLarge(info.size, MAX_DOCUMENT_BYTES);
         const buffer = await api.getFileBuffer(path);
@@ -429,11 +488,14 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // get_file_info
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "get_file_info",
-    "Get metadata for a file or folder in Nextcloud (size, content type, modified date, etag, is_directory).",
     {
-      path: z.string().describe("Path to the file or folder"),
+      description:
+        "Get metadata for a file or folder in Nextcloud (size, content type, modified date, etag, is_directory).",
+      inputSchema: z.object({
+        path: z.string().describe("Path to the file or folder"),
+      }),
     },
     async ({ path }) => {
       try {
@@ -460,12 +522,14 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // upload_file
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "upload_file",
-    "Create or overwrite a text file in Nextcloud.",
     {
-      path: z.string().describe("Destination path for the file"),
-      content: z.string().describe("Text content to write to the file"),
+      description: "Create or overwrite a text file in Nextcloud.",
+      inputSchema: z.object({
+        path: z.string().describe("Destination path for the file"),
+        content: z.string().describe("Text content to write to the file"),
+      }),
     },
     async ({ path, content }) => {
       try {
@@ -486,11 +550,13 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // create_folder
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "create_folder",
-    "Create a new folder (directory) in Nextcloud.",
     {
-      path: z.string().describe("Path of the folder to create"),
+      description: "Create a new folder (directory) in Nextcloud.",
+      inputSchema: z.object({
+        path: z.string().describe("Path of the folder to create"),
+      }),
     },
     async ({ path }) => {
       try {
@@ -517,11 +583,13 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // delete_file
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "delete_file",
-    "Delete a file or folder from Nextcloud.",
     {
-      path: z.string().describe("Path to the file or folder to delete"),
+      description: "Delete a file or folder from Nextcloud.",
+      inputSchema: z.object({
+        path: z.string().describe("Path to the file or folder to delete"),
+      }),
     },
     async ({ path }) => {
       try {
@@ -548,12 +616,14 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // move_file
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "move_file",
-    "Move or rename a file or folder in Nextcloud.",
     {
-      from: z.string().describe("Source path"),
-      to: z.string().describe("Destination path"),
+      description: "Move or rename a file or folder in Nextcloud.",
+      inputSchema: z.object({
+        from: z.string().describe("Source path"),
+        to: z.string().describe("Destination path"),
+      }),
     },
     async ({ from, to }) => {
       try {
@@ -580,12 +650,14 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // copy_file
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "copy_file",
-    "Copy a file or folder in Nextcloud.",
     {
-      from: z.string().describe("Source path"),
-      to: z.string().describe("Destination path"),
+      description: "Copy a file or folder in Nextcloud.",
+      inputSchema: z.object({
+        from: z.string().describe("Source path"),
+        to: z.string().describe("Destination path"),
+      }),
     },
     async ({ from, to }) => {
       try {
@@ -612,16 +684,19 @@ export function registerFileTools(server: McpServer, api: NextcloudAPI): void {
   // -----------------------------------------------------------------------
   // search_files
   // -----------------------------------------------------------------------
-  server.tool(
+  server.registerTool(
     "search_files",
-    "Search for files and folders by name in Nextcloud (case-insensitive filename match).",
     {
-      query: z.string().describe("Search string to match against filenames"),
-      path: z
-        .string()
-        .optional()
-        .default("/")
-        .describe("Root path to search within (default: /)"),
+      description:
+        "Search for files and folders by name in Nextcloud (case-insensitive filename match).",
+      inputSchema: z.object({
+        query: z.string().describe("Search string to match against filenames"),
+        path: z
+          .string()
+          .optional()
+          .default("/")
+          .describe("Root path to search within (default: /)"),
+      }),
     },
     async ({ query, path }) => {
       try {

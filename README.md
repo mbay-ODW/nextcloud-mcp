@@ -2,7 +2,7 @@
 
 MCP server for Nextcloud — file management via WebDAV with Authelia OIDC authentication.
 
-Implements both SSE (`/sse` + `/messages`) and StreamableHTTP (`/mcp`) transports, with RFC 8414 and RFC 9728 OAuth discovery endpoints.
+Implements Streamable HTTP on `/mcp` and `/sse` (the URL used by existing connectors): protocol revision 2026-07-28 per request and the 2025 revisions with sessions, also 2026-07-28 and 2025 on stdio. The old HTTP+SSE transport (`GET /sse` + `POST /messages`) is gone. With RFC 8414 and RFC 9728 OAuth discovery endpoints.
 
 ## Tools
 

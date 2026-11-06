@@ -24,7 +24,7 @@ services:
       - "3000"
     # Single Host(...) router – all paths under nextcloud-mcp.${DOMAIN} go to
     # this container, including /.well-known/* (RFC 8414 + RFC 9728), /sse,
-    # /messages, /mcp. Auth is handled in-app, NOT by Traefik middleware.
+    # /mcp. Auth is handled in-app, NOT by Traefik middleware.
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik"

@@ -8,7 +8,7 @@ const { makePdf, makeOds } = require("./fixtures");
 
 function setup(files) {
   const tools = {};
-  const server = { tool: (name, _desc, _schema, handler) => (tools[name] = handler) };
+  const server = { registerTool: (name, _config, handler) => (tools[name] = handler) };
   const downloads = {};
   const api = {
     async getFileInfo(path) {
